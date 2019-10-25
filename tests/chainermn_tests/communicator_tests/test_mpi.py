@@ -19,6 +19,8 @@ import chainer.testing
 import chainer.testing.attr
 import chainermn
 from chainermn.communicators import _memory_utility
+from chainermn.testing.device import get_device
+import chainerx as chx
 
 
 class _TimeoutThread(threading.Thread):
@@ -63,43 +65,43 @@ class _TimeoutThread(threading.Thread):
                 pass
 
 
-class TestBcastDeadlock(unittest.TestCase):
-    def setup(self, gpu):
-        if gpu:
-            self.communicator = chainermn.create_communicator('flat')
-            self.device = self.communicator.intra_rank
-            chainer.cuda.get_device_from_id(self.device).use()
+@pytest.mark.parametrize('use_chainerx', [True, False])
+def test_bcast_deadlock(use_chainerx):
+    comm = chainermn.create_communicator('flat')
+    mpi_comm = comm.mpi_comm
+    buf_size = 100
+
+    device_id = comm.intra_rank
+    device = get_device(device_id, use_chainerx)
+    # device.use()
+    chainer.cuda.get_device_from_id(device_id).use()
+
+    if comm.size < 2:
+        pytest.skip('This test is for at least two processes')
+
+    q = queue.Queue(maxsize=1)
+
+    if use_chainerx:
+        # chainerx
+        if comm.rank == 0:
+            array = chx.arange(buf_size, dtype=chx.float32, device=device.device)
         else:
-            self.device = -1
-
-        if self.communicator.size < 2:
-            pytest.skip('This test is for at least two processes')
-
-        self.queue = queue.Queue(maxsize=1)
-
-    def tearDown(self):
-        pass
-
-    @chainer.testing.attr.gpu
-    def test_bcast_gpu_large_buffer_deadlock(self):
-        """Regression test of Open MPI's issue #3972"""
-        self.setup(True)
-        buf_size = 10000
-        mpi_comm = self.communicator.mpi_comm
-
-        if self.communicator.rank == 0:
+            array = chx.empty(buf_size, dtype=chx.float32, device=device.device)
+    else:
+        # numpy/cupy
+        if comm.rank == 0:
             array = np.arange(buf_size, dtype=np.float32)
         else:
             array = np.empty(buf_size, dtype=np.float32)
 
-        array = chainer.cuda.to_gpu(array, device=self.device)
+        array = chainer.cuda.to_gpu(array, device=device_id)
 
-        ptr = _memory_utility.array_to_buffer_object(array)
+    ptr = _memory_utility.array_to_buffer_object(array)
 
-        # This Bcast() cause deadlock if the underlying MPI has the bug.
-        th = _TimeoutThread(self.queue, self.communicator.rank)
-        th.start()
-        mpi_comm.Bcast(ptr, root=0)
-        mpi_comm.barrier()
-        self.queue.put(True)
-        assert True
+    # This Bcast() cause deadlock if the underlying MPI has the bug.
+    th = _TimeoutThread(q, comm.rank)
+    th.start()
+    mpi_comm.Bcast(ptr, root=0)
+    mpi_comm.barrier()
+    q.put(True)
+    assert True
