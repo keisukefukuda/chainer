@@ -10,7 +10,6 @@ from subprocess import PIPE
 from subprocess import Popen
 import sys
 import threading
-import unittest
 
 import numpy as np
 import pytest
@@ -84,9 +83,11 @@ def test_bcast_deadlock(use_chainerx):
     if use_chainerx:
         # chainerx
         if comm.rank == 0:
-            array = chx.arange(buf_size, dtype=chx.float32, device=device.device)
+            array = chx.arange(buf_size, dtype=chx.float32,
+                               device=device.device)
         else:
-            array = chx.empty(buf_size, dtype=chx.float32, device=device.device)
+            array = chx.empty(buf_size, dtype=chx.float32,
+                              device=device.device)
     else:
         # numpy/cupy
         if comm.rank == 0:
